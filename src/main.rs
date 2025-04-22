@@ -9,6 +9,7 @@ use sqlx::postgres::PgPoolOptions;
 
 mod owner;
 mod rent_property;
+mod sale_property;
 mod utils;
 
 #[get("/")]
@@ -26,6 +27,9 @@ async fn main() -> std::io::Result<()> {
     dotenv().ok();
 
     let db_url = env::var("DATABASE_URL").expect("Please provide a database url");
+    let address = env::var("ADDRESS").expect("Please provide address to bind");
+    let port = env::var("PORT").expect("Please provide port to bind");
+    let cors_socket = env::var("CORS_SOCKET").expect("Please provide cors socket");
 
     let db_pool = PgPoolOptions::new()
         .max_connections(5)
@@ -47,10 +51,11 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(db_pool.clone()))
             .configure(owner::init_routes)
             .configure(rent_property::init_routes)
+            .configure(sale_property::init_routes)
             .service(Files::new("/rent-pictures", "./uploaded/rents"))
             .wrap(cors)
     })
-    .bind(("127.0.0.1", 3000))?
+    .bind((address, str::parse::<u16>(&port).unwrap()))?
     .run()
     .await
 }

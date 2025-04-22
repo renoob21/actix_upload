@@ -1,17 +1,15 @@
 use std::env;
 
 use actix_multipart::form::{tempfile::TempFile, text::Text, MultipartForm};
-use actix_web::{post, get, web::{self, ServiceConfig}, HttpResponse, Responder};
+use actix_web::{get, post, web::{self, ServiceConfig}, HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
 use sqlx::{prelude::FromRow, PgPool};
 use uuid::Uuid;
 
-use crate::utils::models::ApiResponse;
-
-use super::utils::save_uploaded_file;
+use crate::utils::{models::ApiResponse, save_uploaded_file};
 
 #[derive(Debug, MultipartForm)]
-struct RentUploadForm {
+struct SaleUploadForm {
     #[multipart(rename = "picture")]
     picture: TempFile,
     owner: Text<String>,
@@ -22,12 +20,12 @@ struct RentUploadForm {
     lb: Text<i32>,
     bedroom: Text<i16>,
     bathroom: Text<i16>,
-    monthly_rent: Text<i64>
+    property_price: Text<i64>
 }
 
-#[derive(Debug, Deserialize, Serialize, FromRow)]
-struct RentProperty {
-    rent_property_id: Uuid,
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+struct SaleProperty {
+    sale_property_id: Uuid,
     title: String,
     description: String,
     address: String,
@@ -36,22 +34,23 @@ struct RentProperty {
     lb: i32,
     bedroom: i16,
     bathroom: i16,
-    monthly_rent: i64,
+    property_price: i64,
     picture_url: String,
     status: String
 }
 
-#[post("/api/rent-property")]
-async fn add_rent_property(db_pool: web::Data<PgPool>, mp: MultipartForm<RentUploadForm>) -> impl Responder {
-    let host_address = env::var("HOST_URL").expect("Please provide HOST URL");
+#[post("/api/sale-property")]
+async fn add_sale_property(db_pool: web::Data<PgPool>, mp: MultipartForm<SaleUploadForm>) -> impl Responder {
+    let host_url = env::var("HOST_URL").expect("Please provide HOST_URL");
     let picture_name = match mp.picture.file_name.clone() {
         Some(name) => name,
         None => return HttpResponse::BadRequest().json(
             ApiResponse::<()>::new(false, "Uploaded file error".to_string(), None, Some("Error: Unable to get file name".to_string()))
         )
     };
-    let file_path = format!("./uploaded/rents/{}", picture_name);
-    let url_path = format!("{}/rent-pictures/{}", host_address, picture_name);
+
+    let file_path = format!("./uploaded/sales/{}", picture_name);
+    let url_path = format!("{}/sale-pictures/{}", host_url, picture_name);
 
     // check extension of file
     match infer::get_from_path(mp.picture.file.path()) {
@@ -78,19 +77,19 @@ async fn add_rent_property(db_pool: web::Data<PgPool>, mp: MultipartForm<RentUpl
         return HttpResponse::InternalServerError().json(
             ApiResponse::<()>::new(false, "Failed saving file".to_string(), None, Some(err.to_string()))
         );
-    }
+    };
 
     let property_id = Uuid::new_v4();
     let owner_id = match Uuid::parse_str(&mp.owner) {
-        Ok(uuid) => uuid,
+        Ok(id) => id,
         Err(_) => return HttpResponse::BadRequest().json(
             ApiResponse::<()>::new(false, "Failed converting owner ID".to_string(), None, Some("Error: Invalid UUID format on owner_id".to_string()))
         )
     };
 
     let result = sqlx::query_as!(
-        RentProperty,
-        "INSERT INTO rent_property(rent_property_id, title, description, address, owner_id, lt, lb, bedroom, bathroom, monthly_rent, picture_url, status)
+        SaleProperty,
+        "INSERT INTO sale_property(sale_property_id, title, description, address, owner_id, lt, lb, bedroom, bathroom, property_price, picture_url, status)
             VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'Available')
             RETURNING *",
             property_id,
@@ -102,61 +101,65 @@ async fn add_rent_property(db_pool: web::Data<PgPool>, mp: MultipartForm<RentUpl
             *mp.lb,
             *mp.bedroom,
             *mp.bathroom,
-            *mp.monthly_rent,
+            *mp.property_price,
             url_path
     ).fetch_one(db_pool.get_ref()).await;
 
-
     match result {
-        Err(err) => HttpResponse::InternalServerError().json(ApiResponse::<()>::new(false, "Failed inserting new rent_property".to_string(), None, Some(err.to_string()))),
-        Ok(property) => HttpResponse::Ok().json(ApiResponse::new(true, "Successfully insert new property".to_string(), Some(property), None))
+        Ok(property) => HttpResponse::Ok().json(ApiResponse::new(true, "Successfully inserted sale property".to_string(), Some(property), None)),
+        Err(err) => HttpResponse::InternalServerError().json(ApiResponse::<()>::new(false, "Failed inserting sale property".to_string(), None, Some(err.to_string())))
     }
 }
 
-
-
-#[get("/api/rent-property")]
-async fn get_rent_properties(db_pool: web::Data<PgPool>) -> impl Responder {
+#[get("/api/sale-property")]
+async fn get_sale_properties(db_pool: web::Data<PgPool>) -> impl Responder {
     let result = sqlx::query_as!(
-        RentProperty,
-        "SELECT * FROM rent_property"
+        SaleProperty,
+        "SELECT * FROM sale_property"
     ).fetch_all(db_pool.get_ref()).await;
 
     match result {
-     Ok(properties) => HttpResponse::Ok().json(
-        ApiResponse::new(true, "Successfully retrieved rental properties".to_string(), Some(properties), None)
-     ),
-     Err(_) => HttpResponse::InternalServerError().json(
-        ApiResponse::<()>::new(false, "Failed retrieving rental properties".to_string(), None, Some("Server unable to retrieve data".to_string()))
-     )
-    }
-}
-
-#[get("/api/rent-property/{rent_property_id}")]
-async fn get_rent_property_by_id(db_pool: web::Data<PgPool>, rent_property_id: web::Path<Uuid>) -> impl Responder {
-    let result = sqlx::query_as!(
-        RentProperty,
-        "SELECT * FROM rent_property WHERE rent_property_id = $1",
-        *rent_property_id
-    ).fetch_one(db_pool.get_ref()).await;
-
-    match result {
-        Ok(property) => HttpResponse::Ok().json(ApiResponse::new(true,"Successfully retrieved property".to_string(), Some(property), None)),
+        Ok(properties) => HttpResponse::Ok().json(
+            ApiResponse::new(true, "Successfully fetch sale property".to_string(), Some(properties), None)
+        ),
         Err(err) => match err {
             sqlx::Error::RowNotFound => HttpResponse::NotFound().json(
-                ApiResponse::<()>::new(false, "Property not found".to_string(), None, Some(format!("Error: No property matching id: {}", *rent_property_id)))
+                ApiResponse::<()>::new(false, "Failed fetching sale property".to_string(), None, Some("Error: No sale property found".to_string()))
             ),
             _ => HttpResponse::InternalServerError().json(
-                ApiResponse::<()>::new(false, "Unable to retrieve property".to_string(), None, Some(err.to_string()))
+                ApiResponse::<()>::new(false, "Failed fetching sale property".to_string(), None, Some(err.to_string()))
             )
         }
     }
 }
 
+#[get("/api/sale-property/{sale_property_id}")]
+async fn get_sale_property_by_id(db_pool: web::Data<PgPool>, sale_proerty_id: web::Path<Uuid>) -> impl Responder {
+    let result = sqlx::query_as!(
+        SaleProperty,
+        "SELECT * FROM sale_property WHERE sale_property_id = $1",
+        *sale_proerty_id
+    ).fetch_one(db_pool.get_ref()).await;
+
+    match result {
+        Ok(property) => HttpResponse::Ok().json(
+            ApiResponse::new(true, "Successfully Retrieved Property".to_string(), Some(property), None)
+        ),
+        Err(err) => match err {
+            sqlx::Error::RowNotFound => HttpResponse::NotFound().json(
+                ApiResponse::<()>::new(false, "Failed Fetching Property".to_string(), None, Some(format!("Error: No property matching id: {}", *sale_proerty_id)))
+            ),
+            _ => HttpResponse::InternalServerError().json(
+                ApiResponse::<()>::new(false, "Failed to fetch property".to_string(), None, Some(err.to_string()))
+            )
+        }
+    }
+    
+}
 
 pub fn init_routes(cfg: &mut ServiceConfig) {
     cfg
-        .service(add_rent_property)
-        .service(get_rent_properties)
-        .service(get_rent_property_by_id);
+        .service(add_sale_property)
+        .service(get_sale_properties)
+        .service(get_sale_property_by_id);
 }
