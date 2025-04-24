@@ -39,11 +39,12 @@ async fn main() -> std::io::Result<()> {
 
 
     HttpServer::new(move || {
-        let cors = Cors::default()
-            .allowed_origin(&cors_socket)
-            .allow_any_method()
-            .allow_any_header();
+        // let cors = Cors::default()
+        //     .allowed_origin(&cors_socket)
+        //     .allow_any_method()
+        //     .allow_any_header();
 
+        let cors = Cors::permissive();
 
         App::new()
             .service(hello)
