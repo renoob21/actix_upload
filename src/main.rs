@@ -29,7 +29,7 @@ async fn main() -> std::io::Result<()> {
     let db_url = env::var("DATABASE_URL").expect("Please provide a database url");
     let address = env::var("ADDRESS").expect("Please provide address to bind");
     let port = env::var("PORT").expect("Please provide port to bind");
-    let cors_socket = env::var("CORS_SOCKET").expect("Please provide cors socket");
+    // let cors_socket = env::var("CORS_SOCKET").expect("Please provide cors socket");
 
     let db_pool = PgPoolOptions::new()
         .max_connections(5)
@@ -54,6 +54,7 @@ async fn main() -> std::io::Result<()> {
             .configure(rent_property::init_routes)
             .configure(sale_property::init_routes)
             .service(Files::new("/rent-pictures", "./uploaded/rents"))
+            .service(Files::new("/sale-pictures", "./uploaded/sales"))
             .wrap(cors)
     })
     .bind((address, str::parse::<u16>(&port).unwrap()))?
