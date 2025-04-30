@@ -3,6 +3,7 @@ use std::env;
 use actix_multipart::form::{tempfile::TempFile, text::Text, MultipartForm};
 use actix_web::{get, post, web::{self, ServiceConfig}, HttpResponse, Responder};
 use serde::{Deserialize, Serialize};
+use slug::slugify;
 use sqlx::{prelude::FromRow, PgPool};
 use uuid::Uuid;
 
@@ -43,7 +44,10 @@ struct SaleProperty {
 async fn add_sale_property(db_pool: web::Data<PgPool>, mp: MultipartForm<SaleUploadForm>) -> impl Responder {
     let host_url = env::var("HOST_URL").expect("Please provide HOST_URL");
     let picture_name = match mp.picture.file_name.clone() {
-        Some(name) => name,
+        Some(name) => {
+            let file_path : Vec<&str> = name.split(".").collect();
+            format!("{}.{}", slugify(file_path[0]), file_path[file_path.len() - 1])
+        },
         None => return HttpResponse::BadRequest().json(
             ApiResponse::<()>::new(false, "Uploaded file error".to_string(), None, Some("Error: Unable to get file name".to_string()))
         )
