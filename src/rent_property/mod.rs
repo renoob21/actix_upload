@@ -1,13 +1,15 @@
 use std::env;
 
 use actix_multipart::form::{tempfile::TempFile, text::Text, MultipartForm};
-use actix_web::{post, get, web::{self, ServiceConfig}, HttpResponse, Responder};
+use actix_web::{get, post, web::{self, ServiceConfig}, HttpRequest, HttpResponse, Responder};
+use chrono::{NaiveDate};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use slug::slugify;
-use sqlx::{prelude::FromRow, PgPool};
+use sqlx::{prelude::FromRow};
 use uuid::Uuid;
 
-use crate::utils::models::ApiResponse;
+use crate::{utils::models::ApiResponse, AppState};
 
 use super::utils::save_uploaded_file;
 
@@ -27,23 +29,23 @@ struct RentUploadForm {
 }
 
 #[derive(Debug, Deserialize, Serialize, FromRow)]
-struct RentProperty {
-    rent_property_id: Uuid,
-    title: String,
-    description: String,
-    address: String,
-    owner_id: String,
-    lt: i32,
-    lb: i32,
-    bedroom: i16,
-    bathroom: i16,
-    monthly_rent: i64,
-    picture_url: String,
-    status: String
+pub struct RentProperty {
+    pub rent_property_id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub address: String,
+    pub owner_id: String,
+    pub lt: i32,
+    pub lb: i32,
+    pub bedroom: i16,
+    pub bathroom: i16,
+    pub monthly_rent: i64,
+    pub picture_url: String,
+    pub status: String
 }
 
 #[post("/api/rent-property")]
-async fn add_rent_property(db_pool: web::Data<PgPool>, mp: MultipartForm<RentUploadForm>) -> impl Responder {
+async fn add_rent_property(app_state: web::Data<AppState>, mp: MultipartForm<RentUploadForm>) -> impl Responder {
     let host_address = env::var("HOST_URL").expect("Please provide HOST URL");
     let picture_name = match mp.picture.file_name.clone() {
         Some(name) => {
@@ -108,7 +110,7 @@ async fn add_rent_property(db_pool: web::Data<PgPool>, mp: MultipartForm<RentUpl
             *mp.bathroom,
             *mp.monthly_rent,
             url_path
-    ).fetch_one(db_pool.get_ref()).await;
+    ).fetch_one(&app_state.db_pool).await;
 
 
     match result {
@@ -120,11 +122,15 @@ async fn add_rent_property(db_pool: web::Data<PgPool>, mp: MultipartForm<RentUpl
 
 
 #[get("/api/rent-property")]
-async fn get_rent_properties(db_pool: web::Data<PgPool>) -> impl Responder {
+async fn get_rent_properties(app_state: web::Data<AppState>) -> impl Responder {
     let result = sqlx::query_as!(
         RentProperty,
-        "SELECT * FROM rent_property"
-    ).fetch_all(db_pool.get_ref()).await;
+        "SELECT * FROM rent_property WHERE rent_property_id not in 
+        (
+        SELECT rent_property_id FROM rent_transaction
+        WHERE status != 'Cancelled' AND end_date > CURRENT_DATE
+        )"
+    ).fetch_all(&app_state.db_pool).await;
 
     match result {
      Ok(properties) => HttpResponse::Ok().json(
@@ -137,12 +143,17 @@ async fn get_rent_properties(db_pool: web::Data<PgPool>) -> impl Responder {
 }
 
 #[get("/api/rent-property/{rent_property_id}")]
-async fn get_rent_property_by_id(db_pool: web::Data<PgPool>, rent_property_id: web::Path<Uuid>) -> impl Responder {
+async fn get_rent_property_by_id(app_state: web::Data<AppState>, rent_property_id: web::Path<Uuid>) -> impl Responder {
     let result = sqlx::query_as!(
         RentProperty,
-        "SELECT * FROM rent_property WHERE rent_property_id = $1",
+        "SELECT * FROM rent_property WHERE rent_property_id = $1 
+        AND rent_property_id not in 
+        (
+        SELECT rent_property_id FROM rent_transaction
+        WHERE status != 'Cancelled' AND end_date > CURRENT_DATE
+        )",
         *rent_property_id
-    ).fetch_one(db_pool.get_ref()).await;
+    ).fetch_one(&app_state.db_pool).await;
 
     match result {
         Ok(property) => HttpResponse::Ok().json(ApiResponse::new(true,"Successfully retrieved property".to_string(), Some(property), None)),
@@ -158,9 +169,220 @@ async fn get_rent_property_by_id(db_pool: web::Data<PgPool>, rent_property_id: w
 }
 
 
+
+use crate::{utils::{get_session}};
+
+#[derive(Debug, Deserialize, Serialize, FromRow)]
+struct RentTransaction {
+    rent_transaction_id: Uuid,
+    rent_property_id: Uuid,
+    user_id: Uuid,
+    total_payment: Option<i64>,
+    start_date: NaiveDate,
+    end_date: Option<NaiveDate>,
+    status: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, FromRow)]
+struct RentTransactionObject {
+    rent_transaction_id: Uuid,
+    user_id: Uuid,
+    total_payment: Option<i64>,
+    start_date: NaiveDate,
+    end_date: Option<NaiveDate>,
+    status: String,
+    rent_property: Value
+}
+
+#[derive(Debug, Deserialize)]
+struct RentTransactionForm {
+    rent_property_id: Uuid,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+}
+
+#[post("/api/rent-transaction")]
+async fn post_rent_transaction(app_state: web::Data<AppState>, req: HttpRequest, rent_form: web::Json<RentTransactionForm>) -> impl Responder {
+    let user_session = match get_session(app_state.clone(), &req).await {
+        Err(err) => return HttpResponse::BadRequest().json(
+            ApiResponse::<()>::new(false, "Unable to retrieve user session".to_string(), None, Some(err))
+        ),
+        Ok(session) => session,
+    };
+
+    let new_transaction_id = Uuid::new_v4();
+
+    let property = match sqlx::query_as!(
+        RentProperty,
+        "SELECT * FROM rent_property WHERE rent_property_id = $1
+        AND rent_property_id not in 
+        (
+        SELECT rent_property_id FROM rent_transaction
+        WHERE status != 'Cancelled' AND end_date > CURRENT_DATE
+        )",
+        rent_form.rent_property_id
+    ).fetch_one(&app_state.db_pool).await {
+        Err(err) => match err {
+            sqlx::Error::RowNotFound => return  HttpResponse::NotFound().json(
+                ApiResponse::<()>::new(false, "Property not found".to_string(), None, Some(format!("Error: No property matching id: {}", rent_form.rent_property_id)))
+            ),
+            _ => return  HttpResponse::InternalServerError().json(
+                ApiResponse::<()>::new(false, "Unable to retrieve property".to_string(), None, Some(err.to_string()))
+            )
+        },
+        Ok(prop) => prop
+    };
+
+    let rent_length = rent_form.end_date - rent_form.start_date;
+
+    let total_payment = property.monthly_rent * (rent_length.num_days() / 30);
+
+    let result = sqlx::query_as!(
+        RentTransaction,
+        "INSERT INTO rent_transaction(rent_transaction_id, rent_property_id, user_id, total_payment, start_date, end_date, status)
+        VALUES($1, $2, $3, $4, $5, $6, \'Unpaid\') RETURNING *",
+        new_transaction_id,
+        property.rent_property_id,
+        user_session.user_data.user_id,
+        total_payment,
+        rent_form.start_date,
+        rent_form.end_date,
+    ).fetch_one(&app_state.db_pool).await;
+
+    match result {
+        Err(_) => return HttpResponse::InternalServerError().json(
+            ApiResponse::<()>::new(false,"Failed submitting form".to_string(), None, Some("Server unable to process form submission".to_string()))
+        ),
+        Ok(rent) => return  HttpResponse::Ok().json(
+            ApiResponse::new(true, "Form submission success".to_string(), Some(rent), None)
+        )
+    }
+
+
+    
+}
+
+#[get("/api/rent-transaction/{rent_transaction_id}")]
+async fn get_rent_transaction_by_id(app_state: web::Data<AppState>, req: HttpRequest, rent_transaction_id: web::Path<Uuid>) -> impl Responder {
+    let user_session = match get_session(app_state.clone(), &req).await {
+        Err(err) => return HttpResponse::BadRequest().json(
+            ApiResponse::<()>::new(false, "Unable to retrieve user session".to_string(), None, Some(err))
+        ),
+        Ok(session) => session,
+    };
+
+    let result = sqlx::query_as!(
+        RentTransactionObject,
+        "SELECT 
+        rt.rent_transaction_id,
+        rt.user_id,
+        rt.total_payment,
+        rt.start_date,
+        rt.end_date,
+        rt.status,
+        JSON_BUILD_OBJECT(
+            'rent_property_id', rp.rent_property_id,
+            'title', rp.title,
+            'description', rp.description,
+            'address', rp.address,
+            'owner_id', rp.owner_id,
+            'lt', rp.lt,
+            'lb', rp.lb,
+            'bedroom', rp.bedroom,
+            'bathroom', rp.bathroom,
+            'monthly_rent', rp.monthly_rent,
+            'picture_url', rp.picture_url,
+            'status', rp.status
+        ) AS rent_property
+        FROM rent_transaction rt
+        JOIN rent_property rp ON rt.rent_property_id = rp.rent_property_id
+        WHERE rent_transaction_id = $1;
+        ",
+        *rent_transaction_id
+    ).fetch_one(&app_state.db_pool).await;
+
+    match result {
+        Err(err) => match err {
+            sqlx::Error::RowNotFound => HttpResponse::NotFound().json(
+                ApiResponse::<()>::new(false, "Transaction not found".to_string(), None, Some(format!("Error: No transaction matching id: {}", *rent_transaction_id)))
+            ),
+            _ => HttpResponse::InternalServerError().json(
+                ApiResponse::<()>::new(false, "Unable to retrieve transaction".to_string(), None, Some(err.to_string()))
+            )
+        },
+        Ok(transaction) => {
+            if transaction.user_id == user_session.user_data.user_id {
+                HttpResponse::Ok().json(
+                   ApiResponse::new(true, "Successfully retrieved transaction".to_string(), Some(transaction), None)
+                )
+            } else {
+                HttpResponse::Forbidden().json(
+                    ApiResponse::<()>::new(false, "Content restricted".to_string(), None, Some("User does not match transaction owner".to_string()))
+                )
+            }
+        }
+    }
+
+
+    
+}
+
+
+#[post("/api/pay-rent/{rent_transaction_id}")]
+async fn pay_rent(app_state: web::Data<AppState>, req: HttpRequest, rent_transaction_id: web::Path<Uuid>) -> impl Responder {
+    let user_session = match get_session(app_state.clone(), &req).await {
+        Err(err) => return HttpResponse::BadRequest().json(
+            ApiResponse::<()>::new(false, "Unable to retrieve user session".to_string(), None, Some(err))
+        ),
+        Ok(session) => session,
+    };
+
+    let mut trx = match app_state.db_pool.begin().await {
+        Err(err) => return HttpResponse::InternalServerError().json(
+            ApiResponse::<()>::new(false, "Internal Server Error".to_string(), None, Some(err.to_string()))
+        ),
+
+        Ok(tr) => tr
+    };
+
+    let result = sqlx::query_as!(RentTransaction,
+        "UPDATE rent_transaction SET status = 'Paid' WHERE rent_transaction_id = $1 returning *",
+        *rent_transaction_id
+    ).fetch_one(&mut *trx).await;
+
+    let rent_transaction = match result {
+        Err(err) => match err {
+        sqlx::Error::RowNotFound => return  HttpResponse::NotFound().json(
+            ApiResponse::<()>::new(false, "Failed processing payment".to_string(), None, Some("Invalid transaction id".to_string()))
+        ),
+        _ => return  HttpResponse::InternalServerError().json(
+            ApiResponse::<()>::new(false, "Failed processing payment".to_string(), None, Some(err.to_string()))
+        )
+        },
+        Ok(trans) => trans,
+    };
+
+    if rent_transaction.user_id != user_session.user_data.user_id {
+        trx.rollback().await.unwrap();
+
+        return HttpResponse::Forbidden().json(
+            ApiResponse::<()>::new(false, "Failed processing payment".to_string(), None, Some("User not authorized".to_string()))
+        );
+    }
+
+    trx.commit().await.unwrap();
+
+    HttpResponse::Ok().json(
+        ApiResponse::new(true, "Payment processing success".to_string(), Some(rent_transaction), None)
+    )
+}
+
 pub fn init_routes(cfg: &mut ServiceConfig) {
     cfg
         .service(add_rent_property)
         .service(get_rent_properties)
-        .service(get_rent_property_by_id);
+        .service(get_rent_property_by_id)
+        .service(post_rent_transaction)
+        .service(get_rent_transaction_by_id)
+        .service(pay_rent);
 }

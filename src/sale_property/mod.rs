@@ -1,13 +1,17 @@
+
+
 use std::env;
 
 use actix_multipart::form::{tempfile::TempFile, text::Text, MultipartForm};
 use actix_web::{get, post, web::{self, ServiceConfig}, HttpResponse, Responder};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use slug::slugify;
-use sqlx::{prelude::FromRow, PgPool};
+use sqlx::{prelude::FromRow};
 use uuid::Uuid;
 
-use crate::utils::{models::ApiResponse, save_uploaded_file};
+use crate::{utils::{models::ApiResponse, save_uploaded_file}, AppState};
 
 #[derive(Debug, MultipartForm)]
 struct SaleUploadForm {
@@ -41,7 +45,7 @@ struct SaleProperty {
 }
 
 #[post("/api/sale-property")]
-async fn add_sale_property(db_pool: web::Data<PgPool>, mp: MultipartForm<SaleUploadForm>) -> impl Responder {
+async fn add_sale_property(app_state: web::Data<AppState>, mp: MultipartForm<SaleUploadForm>) -> impl Responder {
     let host_url = env::var("HOST_URL").expect("Please provide HOST_URL");
     let picture_name = match mp.picture.file_name.clone() {
         Some(name) => {
@@ -107,7 +111,7 @@ async fn add_sale_property(db_pool: web::Data<PgPool>, mp: MultipartForm<SaleUpl
             *mp.bathroom,
             *mp.property_price,
             url_path
-    ).fetch_one(db_pool.get_ref()).await;
+    ).fetch_one(&app_state.db_pool).await;
 
     match result {
         Ok(property) => HttpResponse::Ok().json(ApiResponse::new(true, "Successfully inserted sale property".to_string(), Some(property), None)),
@@ -116,11 +120,11 @@ async fn add_sale_property(db_pool: web::Data<PgPool>, mp: MultipartForm<SaleUpl
 }
 
 #[get("/api/sale-property")]
-async fn get_sale_properties(db_pool: web::Data<PgPool>) -> impl Responder {
+async fn get_sale_properties(app_state: web::Data<AppState>) -> impl Responder {
     let result = sqlx::query_as!(
         SaleProperty,
         "SELECT * FROM sale_property"
-    ).fetch_all(db_pool.get_ref()).await;
+    ).fetch_all(&app_state.db_pool).await;
 
     match result {
         Ok(properties) => HttpResponse::Ok().json(
@@ -138,12 +142,12 @@ async fn get_sale_properties(db_pool: web::Data<PgPool>) -> impl Responder {
 }
 
 #[get("/api/sale-property/{sale_property_id}")]
-async fn get_sale_property_by_id(db_pool: web::Data<PgPool>, sale_proerty_id: web::Path<Uuid>) -> impl Responder {
+async fn get_sale_property_by_id(app_state: web::Data<AppState>, sale_proerty_id: web::Path<Uuid>) -> impl Responder {
     let result = sqlx::query_as!(
         SaleProperty,
         "SELECT * FROM sale_property WHERE sale_property_id = $1",
         *sale_proerty_id
-    ).fetch_one(db_pool.get_ref()).await;
+    ).fetch_one(&app_state.db_pool).await;
 
     match result {
         Ok(property) => HttpResponse::Ok().json(
@@ -160,6 +164,45 @@ async fn get_sale_property_by_id(db_pool: web::Data<PgPool>, sale_proerty_id: we
     }
     
 }
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+struct SaleTransaction {
+    sale_transaction_id: Uuid,
+    sale_property_id: Uuid,
+    user_id: Uuid,
+    down_payment: i64,
+    installment_duration: i32,
+    monthly_mortgage: i64,
+    sale_date: NaiveDate,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SaleForm {
+    down_payment: i64,
+    installment_duration: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+struct SaleTransactionObject {
+    sale_transaction_id: Uuid,
+    user_id: Uuid,
+    down_payment: i64,
+    installment_duration: i32,
+    monthly_mortgage: i64,
+    sale_date: NaiveDate,
+    status: String,
+    sale_property: Value,
+}
+
+
+fn calculate_monthly_mortgage(total_loan: i64, down_payment: i64, loan_duration: i32, interest_rate: f64) -> i64 {
+    let principal = total_loan - down_payment;
+    let monthly_rate = interest_rate / 12.0;
+
+    (principal as f64 * monthly_rate * (1.0 + monthly_rate).powf(loan_duration as f64) / ((1.0 + monthly_rate).powf(loan_duration as f64) - 1.0)) as i64
+}
+
 
 pub fn init_routes(cfg: &mut ServiceConfig) {
     cfg
