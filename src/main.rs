@@ -8,7 +8,6 @@ use dotenv::dotenv;
 use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use utils::models::Session;
-use uuid::Uuid;
 
 mod owner;
 mod rent_property;
@@ -18,7 +17,6 @@ mod user;
 
 #[derive(Clone)]
 struct AppState {
-    instance_id: Uuid,
     db_pool: PgPool,
     session_store: Arc<Mutex<HashMap<String, Session>>>
 }
@@ -36,8 +34,8 @@ async fn greetings(name: web::Path<String>) -> impl Responder {
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv().ok();
-    let app_instance_id = Uuid::new_v4(); // Generate a unique ID for this server run
-    println!("[{}] Server starting up... AppState Instance ID will be: {}", Local::now().to_rfc3339(), app_instance_id);
+    
+    println!("[{}] Server starting up...", Local::now().to_rfc3339());
 
     let db_url = env::var("DATABASE_URL").expect("Please provide a database url");
     let address = env::var("ADDRESS").expect("Please provide address to bind");
@@ -53,7 +51,6 @@ async fn main() -> std::io::Result<()> {
     let shared_state = AppState {
         db_pool: db_pool.clone(),
         session_store: Arc::new(Mutex::new(HashMap::new())),
-        instance_id: Uuid::new_v4(),
     };
 
     let app_state = web::Data::new(shared_state);

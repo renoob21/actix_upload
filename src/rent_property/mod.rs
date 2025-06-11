@@ -327,6 +327,65 @@ async fn get_rent_transaction_by_id(app_state: web::Data<AppState>, req: HttpReq
     
 }
 
+#[get("/api/my-rent-transaction")]
+async fn get_my_rent_transaction(app_state: web::Data<AppState>, req: HttpRequest) -> impl Responder {
+    let user_session = match get_session(app_state.clone(), &req).await {
+        Err(err) => return HttpResponse::BadRequest().json(
+            ApiResponse::<()>::new(false, "Unable to retrieve user session".to_string(), None, Some(err))
+        ),
+        Ok(session) => session,
+    };
+
+    let result = sqlx::query_as!(
+        RentTransactionObject,
+        "SELECT 
+        rt.rent_transaction_id,
+        rt.user_id,
+        rt.total_payment,
+        rt.start_date,
+        rt.end_date,
+        rt.status,
+        JSON_BUILD_OBJECT(
+            'rent_property_id', rp.rent_property_id,
+            'title', rp.title,
+            'description', rp.description,
+            'address', rp.address,
+            'owner_id', rp.owner_id,
+            'lt', rp.lt,
+            'lb', rp.lb,
+            'bedroom', rp.bedroom,
+            'bathroom', rp.bathroom,
+            'monthly_rent', rp.monthly_rent,
+            'picture_url', rp.picture_url,
+            'status', rp.status
+        ) AS rent_property
+        FROM rent_transaction rt
+        JOIN rent_property rp ON rt.rent_property_id = rp.rent_property_id
+        WHERE user_id = $1;
+        ",
+        user_session.user_data.user_id,
+    ).fetch_all(&app_state.db_pool).await;
+
+
+    match result {
+        Err(err) => match err {
+            sqlx::Error::RowNotFound => HttpResponse::NotFound().json(
+                ApiResponse::<()>::new(false, "Transaction not found".to_string(), None, Some(format!("Error: No transaction for user id: {}", user_session.user_data.user_id)))
+            ),
+            _ => HttpResponse::InternalServerError().json(
+                ApiResponse::<()>::new(false, "Unable to retrieve transaction".to_string(), None, Some(err.to_string()))
+            )
+        },
+        Ok(transaction) => {
+            HttpResponse::Ok().json(
+                   ApiResponse::new(true, "Successfully retrieved transaction".to_string(), Some(transaction), None)
+                )
+        }
+    }
+    
+    
+}
+
 
 #[post("/api/pay-rent/{rent_transaction_id}")]
 async fn pay_rent(app_state: web::Data<AppState>, req: HttpRequest, rent_transaction_id: web::Path<Uuid>) -> impl Responder {
@@ -384,5 +443,6 @@ pub fn init_routes(cfg: &mut ServiceConfig) {
         .service(get_rent_property_by_id)
         .service(post_rent_transaction)
         .service(get_rent_transaction_by_id)
+        .service(get_my_rent_transaction)
         .service(pay_rent);
 }

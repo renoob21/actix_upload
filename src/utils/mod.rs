@@ -1,9 +1,9 @@
 use std::{fs, io, path::Path};
 
 use actix_multipart::form::tempfile::TempFile;
-use actix_web::{web, HttpRequest, HttpResponse};
+use actix_web::{web, HttpRequest};
 use chrono::Utc;
-use models::{ApiResponse, Session};
+use models::{ Session};
 
 use crate::AppState;
 

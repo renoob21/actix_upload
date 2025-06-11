@@ -1,6 +1,5 @@
 use actix_web::{get, post, web::{self, ServiceConfig}, HttpRequest, HttpResponse, Responder};
 use bcrypt::{hash, DEFAULT_COST};
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::{prelude::FromRow, query_as, PgPool, Result};
 use uuid::Uuid;
