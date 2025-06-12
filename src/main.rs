@@ -5,7 +5,7 @@ use actix_files::Files;
 use chrono::Local;
 use dotenv::dotenv;
 
-use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, http::{self, header::HeaderName}, web, App, HttpResponse, HttpServer, Responder};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use utils::models::Session;
 
@@ -57,12 +57,18 @@ async fn main() -> std::io::Result<()> {
 
 
     HttpServer::new(move || {
-        // let cors = Cors::default()
-        //     .allowed_origin(&cors_socket)
-        //     .allow_any_method()
-        //     .allow_any_header();
+        let cors = Cors::default()
+            .allowed_origin("http://127.0.0.1:5500")
+            .allowed_origin("https://renoob21.github.io")
+            .allowed_methods(vec!["GET", "POST", "OPTIONS"])
+            .allowed_headers(vec![
+                http::header::CONTENT_TYPE,
+                http::header::AUTHORIZATION,
+                http::header::ACCEPT,
+                HeaderName::from_static("session_id")
+            ]).max_age(3600);
 
-        let cors = Cors::permissive();
+        // let cors = Cors::permissive();
 
         
 
