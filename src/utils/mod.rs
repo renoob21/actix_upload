@@ -24,6 +24,13 @@ pub async fn save_uploaded_file(temp_file: &TempFile, target_path: &str) -> io::
 }
 
 pub async fn get_session(app_state: web::Data<AppState>, req: &HttpRequest) -> Result<Session, String> {
+    println!("\n--- Handler Triggered: Checking Headers ---");
+    for (name, value) in req.headers().iter() {
+        println!("  > {}: {:?}", name, value.to_str().unwrap_or("[non-utf8 value]"));
+    }
+    println!("------------------------------------------\n");
+
+
     let session_id = match req.headers().get("session_id") {
         None => return Err("Required header \'session_id\'".to_string()),
         Some(id) => id.to_str().unwrap()
